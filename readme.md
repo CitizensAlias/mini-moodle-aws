@@ -33,15 +33,15 @@ A small web platform for distributing learning materials (text and images) to se
 
 ```mermaid
 flowchart LR
-    U[Browser] -->|HTTPS| FE[Frontend<br/>Blazor WebAssembly + MudBlazor<br/>static files]
-    U -->|HTTPS /api/*| BE[Backend<br/>Spring Boot REST API]
+    U[Browser] -->|"HTTPS (page + SignalR/WebSocket)"| FE[Frontend<br/>Blazor Server + MudBlazor]
+    FE -->|"HTTP, localhost"| BE[Backend<br/>Spring Boot REST API]
     BE -->|JDBC| DB[(PostgreSQL<br/>users, materials, grants)]
     BE -->|upload / delete<br/>validated| FS[(Object storage<br/>image files)]
     U -->|GET via presigned URL| FS
 
     classDef frontend fill:#386641,color:#fff,stroke:#24422a,stroke-width:2px
-classDef backend fill:#2b4c7e,color:#fff,stroke:#1b3152,stroke-width:2px
-classDef database fill:#bc4749,color:#fff,stroke:#822e30,stroke-width:2px
+    classDef backend fill:#2b4c7e,color:#fff,stroke:#1b3152,stroke-width:2px
+    classDef database fill:#bc4749,color:#fff,stroke:#822e30,stroke-width:2px
     class FE frontend
     class BE,FS backend
     class DB database
@@ -49,10 +49,10 @@ classDef database fill:#bc4749,color:#fff,stroke:#822e30,stroke-width:2px
 
 | Component | Responsibility |
 |---|---|
-| Frontend | UI, admin screens (users, materials, access), user material view. Talks only to the relative path `/api/*`. |
-| Backend | Authentication (BCrypt + JWT), `must_change_password` enforcement, authorization of every material access, upload validation (type, size), presigned URL generation. |
+| Frontend | Blazor Server application: the UI is rendered on the server and kept in sync with the browser over a persistent SignalR (WebSocket) connection. Provides login, admin screens (users, materials, access) and the user material view. It is the only client of the backend, calls it over `localhost` and keeps the JWT on the server side, so the browser only holds a session cookie. |
+| Backend | Authentication (BCrypt + JWT), `must_change_password` enforcement, authorization of every material access, upload validation (type, size), presigned URL generation. Not reachable from the internet, only from the frontend container. |
 | PostgreSQL | Users, materials (metadata and text), access grants, S3 object keys. |
-| Object storage | Image binaries. The bucket is fully private. |
+| Object storage | Image binaries. The bucket is fully private. The browser loads images directly from it via presigned URLs. |
 
 ### 2.2 AWS
 
@@ -61,19 +61,20 @@ flowchart TB
     User[Browser]
 
     subgraph AWS[AWS region us-east-1]
-        R53[Route 53<br/> somedomain.de]
-        ACM[ACM certificate<br/>somedomain.de<br/>api.somedomain.de]
-        CF[CloudFront<br/>HTTPS for users]
-        S3FE[(S3: frontend bucket)]
+        R53[Route 53<br/>somedomain.de]
+        ACM[ACM certificate<br/>somedomain.de]
         S3IMG[(S3: uploads bucket<br/>private)]
-        ECR[ECR]
+        ECR[ECR<br/>frontend + backend images]
         SM[Secrets Manager]
         CW[CloudWatch<br/>Logs, Alarm]
 
         subgraph VPC[VPC 10.0.0.0/16]
             subgraph PUB[Public subnets, 2 AZs]
-                ALB[Application Load Balancer<br/>HTTPS :443<br/>SG: CloudFront prefix list]
-                ECS[ECS Fargate task<br/>Spring Boot :8080<br/>public IP, SG: ALB only]
+                ALB[Application Load Balancer<br/>HTTPS :443, :80 redirects to HTTPS<br/>SG: internet]
+                subgraph TASK[ECS Fargate task, public IP, SG: ALB only]
+                    FE[Frontend container<br/>Blazor Server :5000]
+                    BE[Backend container<br/>Spring Boot :8080<br/>localhost only]
+                end
             end
             subgraph PRIV[Private subnets, 2 AZs]
                 RDS[(RDS PostgreSQL<br/>db.t4g.micro, single AZ)]
@@ -81,64 +82,61 @@ flowchart TB
         end
     end
 
-    User -->|HTTPS| CF
-    CF -->|"HTTPS via OAC, /*"| S3FE
-    CF -->|"HTTPS, /api/*"| ALB
-    ALB -->|"HTTP :8080, inside VPC"| ECS
-    ECS -->|5432| RDS
-    ECS -->|AWS SDK, HTTPS| S3IMG
+    User -->|HTTPS| ALB
+    ALB -->|"HTTP :5000, inside VPC"| FE
+    FE -->|"HTTP localhost:8080"| BE
+    BE -->|:5432| RDS
+    BE -->|AWS SDK, HTTPS| S3IMG
     User -->|HTTPS, presigned URL| S3IMG
-    ECR -.->|image pull| ECS
-    SM -.->|DB password, JWT secret,<br/>admin seed| ECS
-    ECS -.->|logs| CW
+    ECR -.->|image pull| TASK
+    SM -.->|DB password, JWT secret,<br/>admin seed| BE
+    FE -.->|logs| CW
+    BE -.->|logs| CW
     ALB -.->|5xx metric| CW
-    R53 -.->|alias<br/>somedomain.de| CF
-    R53 -.->|alias<br/>api.somedomain.de| ALB
-    ACM -.->|TLS certificate for<br/>somedomain.de| CF
-    ACM -.->|TLS certificate for<br/>api.somedomain.de| ALB
+    R53 -.->|alias<br/>somedomain.de| ALB
+    ACM -.->|TLS certificate for<br/>somedomain.de| ALB
 
     classDef frontend fill:#386641,color:#fff,stroke:#24422a,stroke-width:2px
     classDef backend fill:#2b4c7e,color:#fff,stroke:#1b3152,stroke-width:2px
     classDef database fill:#bc4749,color:#fff,stroke:#822e30,stroke-width:2px
     classDef shared fill:#a66321,color:#fff,stroke:#6e4014,stroke-width:2px
 
-    class CF,S3FE frontend
-    class ALB,ECS,ECR,SM,S3IMG backend
+    class FE frontend
+    class BE,ECR,SM,S3IMG backend
     class RDS database
-    class R53,ACM,CW shared
+    class R53,ACM,CW,ALB shared
 ```
 
 | AWS service | Used for |
 |---|---|
-| S3 (2 buckets) | Static frontend hosting (accessed by CloudFront via OAC); private storage for uploaded images |
-| CloudFront | HTTPS entry point for users; serves the frontend and routes `/api/*` to the ALB |
-| Route 53 + ACM | DNS name for the ALB and its free TLS certificate (DNS validation) |
-| Application Load Balancer | HTTPS termination, health checks, entry point for the backend |
-| ECS Fargate + ECR | Runs the backend container; ECR stores images built by the pipeline |
+| S3 (1 bucket) | Private storage for uploaded images |
+| Route 53 + ACM | Domain `somedomain.de` pointing to the ALB (alias record) and its free TLS certificate (DNS validation) |
+| Application Load Balancer | HTTPS termination, HTTP to HTTPS redirect, health checks, WebSocket support for Blazor Server, entry point for the whole application |
+| ECS Fargate + ECR | Runs one task with two containers (frontend and backend); ECR stores both images built by the pipeline |
 | RDS PostgreSQL | Relational data |
 | Secrets Manager | DB password, JWT signing key, initial admin password |
-| CloudWatch | Backend log (retention 7 days) |
+| CloudWatch | Logs of both containers (retention 7 days) |
 
 ### 2.3 Network and security groups
 
 | Resource | Subnet | Inbound |
 |---|---|---|
-| ALB | public | 443 from the CloudFront managed prefix list |
-| ECS task | public (public IP) | 8080 from the ALB security group only |
+| ALB | public | 443 and 80 from the internet (80 only redirects to HTTPS) |
+| ECS task | public (public IP) | 5000 from the ALB security group only. Backend port 8080 is not opened, it is reachable only via `localhost` inside the task. |
 | RDS | private | 5432 from the ECS security group only |
 
 ### 2.4 Key architectural decisions
 
 | Decision | Reason | Trade-off |
 |---|---|---|
-| Blazor **WebAssembly** instead of Blazor Server | Static files, so S3 + CloudFront is enough; no extra container and no persistent SignalR connections | Larger first download |
-| `/api/*` routed through CloudFront | One origin for the browser: HTTPS everywhere on the user side, no CORS, backend responds only to frontend | Requires cache policy that forwards `Authorization` |
-| ALB with ACM certificate and own domain | End-to-end HTTPS till VPC; certificate is free and auto-renewed | own domain and Route 53 zone needed |
+| Blazor **Server** instead of WebAssembly | Frontend runs as a container next to the backend: no CloudFront, nor frontend S3 bucket. The browser never calls the backend, so no CORS and no JWT in the browser | Persistent SignalR connection per user; sessions are lost on deployment or task restart; scaling to several tasks would require sticky sessions |
+| Frontend and backend as two containers in one Fargate task | Backend is reachable only via `localhost`, so it is not exposed to the internet; no service discovery needed | Both are deployed and scaled together (one task definition, one pipeline) |
+| ALB with ACM certificate and own domain | HTTPS between browser and ALB; certificate is free and auto-renewed | Own domain and Route 53 zone needed; traffic ALB to task is HTTP inside the VPC |
 | Fargate instead of EC2 | No OS or Docker to maintain; rolling updates and health checks via ECS | Higher cost than a single EC2 |
 | ECS task in a **public** subnet, reachable only from the ALB security group | Avoids NAT Gateway and interface VPC endpoints | Task has a public IP; protected by the security group only |
 | RDS in private subnets | Database has no route from the internet | - |
 | Files in S3, metadata and grants in PostgreSQL | DB stays small; authorization stays in one place (backend) | Two stores to keep consistent |
-| Presigned URLs for downloads | Backend never touches the actual image bytes; bucket stays private | URL stays valid until expiry, even if access is revoked meanwhile |
+| Presigned URLs for downloads | Backend never touches the actual image bytes on download; bucket stays private | URL stays valid until expiry, even if access is revoked meanwhile |
 | Own auth (BCrypt + JWT) instead of Cognito | Easier local development and testing | We maintain security-critical code ourselves |
 
 ## 3. Software Delivery Process
