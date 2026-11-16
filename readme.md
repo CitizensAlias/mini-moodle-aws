@@ -10,7 +10,7 @@ A small web platform for distributing learning materials (text and images) to se
 
 - One admin who is assigned from a secret upon first startup.
 - The admin creates user accounts with a username (assigned by admin) and a one-time password.
-- On first login the user must set their own password.
+- On first login the user should set their own password.
 - The admin uploads materials (text posts and images) and selects which users may access which material.
 - Users see only materials they were granted. Images are served through short-lived presigned S3 URLs, issued only after an authorization check.
 
@@ -50,7 +50,7 @@ flowchart LR
 | Component | Responsibility |
 |---|---|
 | Frontend | Blazor Server application: the UI is rendered on the server and kept in sync with the browser over a persistent SignalR (WebSocket) connection. Provides login, admin screens (users, materials, access) and the user material view. It is the only client of the backend, calls it over `localhost` and keeps the JWT on the server side, so the browser only holds a session cookie. |
-| Backend | Authentication (BCrypt + JWT), `must_change_password` enforcement, authorization of every material access, upload validation (type, size), presigned URL generation. Not reachable from the internet, only from the frontend container. |
+| Backend | Authentication (BCrypt + JWT), authorization of every material access, upload validation (type, size), presigned URL generation. Not reachable from the internet, only from the frontend container. |
 | PostgreSQL | Users, materials (metadata and text), access grants, S3 object keys. |
 | Object storage | Image binaries. The bucket is fully private. The browser loads images directly from it via presigned URLs. |
 
@@ -129,7 +129,7 @@ flowchart TB
 
 | Decision | Reason | Trade-off |
 |---|---|---|
-| Blazor **Server** instead of WebAssembly | Frontend runs as a container next to the backend: no CloudFront, nor frontend S3 bucket. The browser never calls the backend, so no CORS and no JWT in the browser | Persistent SignalR connection per user; sessions are lost on deployment or task restart; scaling to several tasks would require sticky sessions |
+| Blazor **Server** in Static Server rendering mode instead of WebAssembly | Frontend runs as a container next to the backend: no CloudFront, nor frontend S3 bucket. The browser never calls the backend, so no CORS and no JWT in the browser | No persistent SignalR connection thus no interactive UIs/feutures |
 | Frontend and backend as two containers in one Fargate task | Backend is reachable only via `localhost`, so it is not exposed to the internet; no service discovery needed | Both are deployed and scaled together (one task definition, one pipeline) |
 | ALB with ACM certificate and own domain | HTTPS between browser and ALB; certificate is free and auto-renewed | Own domain and Route 53 zone needed; traffic ALB to task is HTTP inside the VPC |
 | Fargate instead of EC2 | No OS or Docker to maintain; rolling updates and health checks via ECS | Higher cost than a single EC2 |
@@ -172,6 +172,7 @@ flowchart LR
 backend/            Spring Boot application and tests
 frontend/           Blazor WebAssembly + MudBlazor
 infra/              Terraform (network, rds, alb, ecs, storage, cdn, dns, monitoring)
+models/             architecture relevant graphs and .mds
 docker-compose.yml  local PostgreSQL
 .github/workflows/  GitHub Actions workflows
 ```
