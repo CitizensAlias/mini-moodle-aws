@@ -1,0 +1,16 @@
+name: Main CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  frontend:
+    name: Frontend
+    uses: ./.github/workflows/frontend-build.yml
+
+#   backend:
+#     name: Backend
+#     uses: ./.github/workflows/backend-build.yml
