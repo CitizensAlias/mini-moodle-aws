@@ -1,0 +1,27 @@
+name: Frontend Build
+
+on:
+  workflow_call: 
+
+jobs:
+  build-blazor:
+    name: Build Blazor
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Setup .NET 10
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build Blazor Server
+      run: dotnet build --no-restore --configuration Release
