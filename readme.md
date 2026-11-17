@@ -170,7 +170,7 @@ flowchart LR
 
 ```
 backend/            Spring Boot application and tests
-frontend/           Blazor WebAssembly + MudBlazor
+frontend/           Blazor Server + MudBlazor
 infra/              Terraform (network, rds, alb, ecs, storage, cdn, dns, monitoring)
 models/             architecture relevant graphs and .mds
 docker-compose.yml  local PostgreSQL
