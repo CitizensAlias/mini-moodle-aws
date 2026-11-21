@@ -1,5 +1,6 @@
 using MudBlazor.Services;
 using minimoodle.Components;
+using minimoodle.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,6 +9,12 @@ builder.Services.AddMudServices();
 
 // Add services to the container.
 builder.Services.AddRazorComponents();
+
+/*
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IUserManager, UserManager>();
+builder.Services.AddScoped<IAdminManager, AdminManager>();
+*/
 
 var app = builder.Build();
 
